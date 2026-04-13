@@ -1,4 +1,4 @@
-import React, { useRef, useEffect } from 'react';
+import React from 'react';
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -27,14 +27,15 @@ ChartJS.register(
 );
 
 /**
- * ComparisonChart — Bar chart comparing LRU vs Optimal algorithm performance
+ * ComparisonChart — Bar chart comparing FIFO vs LRU vs Optimal performance
  *
  * Props:
+ *  fifoResult    {Object|null}  FIFO simulation results
  *  lruResult     {Object|null}  LRU simulation results
  *  optimalResult {Object|null}  Optimal simulation results
  */
-export default function ComparisonChart({ lruResult, optimalResult }) {
-  if (!lruResult && !optimalResult) {
+export default function ComparisonChart({ fifoResult, lruResult, optimalResult }) {
+  if (!fifoResult && !lruResult && !optimalResult) {
     return (
       <div className="flex items-center justify-center h-48 text-slate-500 text-sm italic">
         Run the simulation to see comparison
@@ -46,14 +47,33 @@ export default function ComparisonChart({ lruResult, optimalResult }) {
     labels: ['Page Faults', 'Page Hits', 'Hit Ratio (%)'],
     datasets: [
       {
+        label: 'FIFO',
+        data: fifoResult
+          ? [fifoResult.totalFaults, fifoResult.totalHits, parseFloat(fifoResult.hitRatio)]
+          : [0, 0, 0],
+        backgroundColor: [
+          'rgba(239, 68, 68, 0.55)',   // faults → red
+          'rgba(34, 197, 94, 0.55)',   // hits → green
+          'rgba(251, 146, 60, 0.55)',  // ratio → orange
+        ],
+        borderColor: [
+          'rgba(239, 68, 68, 1)',
+          'rgba(34, 197, 94, 1)',
+          'rgba(251, 146, 60, 1)',
+        ],
+        borderWidth: 2,
+        borderRadius: 8,
+        borderSkipped: false,
+      },
+      {
         label: 'LRU',
         data: lruResult
           ? [lruResult.totalFaults, lruResult.totalHits, parseFloat(lruResult.hitRatio)]
           : [0, 0, 0],
         backgroundColor: [
-          'rgba(239, 68, 68, 0.7)',   // faults → red
-          'rgba(34, 197, 94, 0.7)',   // hits → green
-          'rgba(59, 130, 246, 0.7)',  // ratio → blue
+          'rgba(239, 68, 68, 0.75)',
+          'rgba(34, 197, 94, 0.75)',
+          'rgba(59, 130, 246, 0.75)',
         ],
         borderColor: [
           'rgba(239, 68, 68, 1)',
@@ -70,19 +90,18 @@ export default function ComparisonChart({ lruResult, optimalResult }) {
           ? [optimalResult.totalFaults, optimalResult.totalHits, parseFloat(optimalResult.hitRatio)]
           : [0, 0, 0],
         backgroundColor: [
-          'rgba(239, 68, 68, 0.3)',
-          'rgba(34, 197, 94, 0.3)',
-          'rgba(59, 130, 246, 0.3)',
+          'rgba(167, 139, 250, 0.45)',
+          'rgba(52, 211, 153, 0.45)',
+          'rgba(139, 92, 246, 0.45)',
         ],
         borderColor: [
-          'rgba(239, 68, 68, 0.6)',
-          'rgba(34, 197, 94, 0.6)',
-          'rgba(59, 130, 246, 0.6)',
+          'rgba(167, 139, 250, 0.8)',
+          'rgba(52, 211, 153, 0.8)',
+          'rgba(139, 92, 246, 0.8)',
         ],
         borderWidth: 2,
         borderRadius: 8,
         borderSkipped: false,
-        borderDash: [4, 4],
       },
     ],
   };
@@ -141,7 +160,7 @@ export default function ComparisonChart({ lruResult, optimalResult }) {
   };
 
   return (
-    <div style={{ height: '280px' }}>
+    <div style={{ height: '300px' }}>
       <Bar data={data} options={options} />
     </div>
   );

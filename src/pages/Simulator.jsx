@@ -6,6 +6,7 @@ import StatsPanel from '../components/StatsPanel';
 import ComparisonChart from '../components/ComparisonChart';
 import { runLRU } from '../algorithms/lru';
 import { runOptimal } from '../algorithms/optimal';
+import { runFIFO } from '../algorithms/fifo';
 
 /**
  * Simulator — the main simulation page
@@ -14,10 +15,11 @@ export default function Simulator() {
   // ── Inputs ────────────────────────────────────────────────────────────
   const [frames, setFrames] = useState(3);
   const [pageInput, setPageInput] = useState('7,0,1,2,0,3,0,4,2,3,0,3,2,1,2,0,1,7,0,1');
-  const [algorithm, setAlgorithm] = useState('lru');
+  const [algorithm, setAlgorithm] = useState('fifo');
 
   // ── Simulation state ──────────────────────────────────────────────────
   const [result, setResult] = useState(null);
+  const [fifoResult, setFifoResult] = useState(null);
   const [lruResult, setLruResult] = useState(null);
   const [optimalResult, setOptimalResult] = useState(null);
   const [currentStep, setCurrentStep] = useState(0);
@@ -59,20 +61,22 @@ export default function Simulator() {
     // Cancel any running animation
     if (animIntervalRef.current) clearInterval(animIntervalRef.current);
 
-    const runFn = algorithm === 'lru' ? runLRU : runOptimal;
+    const runFn = algorithm === 'fifo' ? runFIFO : algorithm === 'lru' ? runLRU : runOptimal;
     const res = runFn(pages, frames);
-    const lru = runLRU(pages, frames);
-    const opt = runOptimal(pages, frames);
+    const fifo = runFIFO(pages, frames);
+    const lru  = runLRU(pages, frames);
+    const opt  = runOptimal(pages, frames);
 
     setResult(res);
+    setFifoResult(fifo);
     setLruResult(lru);
     setOptimalResult(opt);
     setCurrentStep(0);    // Reset to 0 — animation fills it in
     setIsAnimating(true);
 
-    // Adaptive speed: target ~4 s total, clamp 120–500 ms per step
+    // Adaptive speed: target ~10 s total, clamp 400–1200 ms per step
     const total = res.steps.length;
-    const delay = Math.max(120, Math.min(500, Math.floor(4000 / total)));
+    const delay = Math.max(400, Math.min(1200, Math.floor(10000 / total)));
 
     let step = 0;
     animIntervalRef.current = setInterval(() => {
@@ -110,10 +114,11 @@ export default function Simulator() {
     setIsAnimating(false);
 
     if (!result) {
-      const runFn = algorithm === 'lru' ? runLRU : runOptimal;
+      const runFn = algorithm === 'fifo' ? runFIFO : algorithm === 'lru' ? runLRU : runOptimal;
       const res = runFn(pages, frames);
       setResult(res);
       setCurrentStep(1);
+      setFifoResult(runFIFO(pages, frames));
       setLruResult(runLRU(pages, frames));
       setOptimalResult(runOptimal(pages, frames));
     } else {
@@ -127,6 +132,7 @@ export default function Simulator() {
     animIntervalRef.current = null;
     setIsAnimating(false);
     setResult(null);
+    setFifoResult(null);
     setLruResult(null);
     setOptimalResult(null);
     setCurrentStep(0);
@@ -144,11 +150,11 @@ export default function Simulator() {
     : '0.0';
 
   return (
-    <div className="min-h-screen bg-[#0d1117] text-slate-200 p-4 md:p-8">
-      <div className="max-w-7xl mx-auto space-y-6">
+    <div className="min-h-screen bg-[#0d1117] text-slate-200 p-4 md:p-10">
+      <div className="max-w-7xl mx-auto space-y-8">
 
         {/* ── Header ── */}
-        <header className="text-center space-y-3 py-6 animate-slide-up">
+        <header className="text-center space-y-4 py-10 animate-slide-up">
           <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full
                           bg-blue-500/10 border border-blue-500/20 text-blue-400 text-xs font-semibold
                           uppercase tracking-widest mb-2">
@@ -160,14 +166,15 @@ export default function Simulator() {
           </h1>
           <p className="text-slate-400 text-sm md:text-base max-w-2xl mx-auto">
             Visualize page replacement algorithms step-by-step. Compare&nbsp;
-            <span className="text-blue-400 font-semibold">LRU</span> vs.&nbsp;
+            <span className="text-orange-400 font-semibold">FIFO</span>,&nbsp;
+            <span className="text-blue-400 font-semibold">LRU</span> and&nbsp;
             <span className="text-violet-400 font-semibold">Optimal</span>&nbsp;
             to understand page fault behavior and memory efficiency.
           </p>
         </header>
 
         {/* ── Configuration Card ── */}
-        <div className="glass-card rounded-2xl p-6 space-y-5 animate-slide-up" style={{ animationDelay: '0.05s' }}>
+        <div className="glass-card rounded-2xl p-8 space-y-7 animate-slide-up" style={{ animationDelay: '0.05s' }}>
           <div className="flex items-center gap-3 mb-1">
             <div className="w-8 h-8 rounded-lg bg-blue-500/20 flex items-center justify-center">
               <svg className="w-4 h-4 text-blue-400" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
@@ -252,7 +259,7 @@ export default function Simulator() {
               {[
                 { id: 'grid',    label: 'Memory Grid',    icon: '▦' },
                 { id: 'steps',   label: 'Step-by-Step',   icon: '≡' },
-                { id: 'compare', label: 'LRU vs Optimal', icon: '\u27C1' },
+                { id: 'compare', label: 'Compare All',     icon: '⊿' },
               ].map((tab) => (
                 <button
                   key={tab.id}
@@ -276,7 +283,13 @@ export default function Simulator() {
                 <div>
                   <div className="flex items-center justify-between mb-4">
                     <h2 className="font-bold text-slate-200 text-base">Memory Frame Visualization</h2>
-                    <span className="text-xs px-2.5 py-1 rounded-full bg-slate-700/60 text-slate-400">
+                    <span className={`text-xs px-2.5 py-1 rounded-full ${
+                      algorithm === 'fifo'
+                        ? 'bg-orange-500/15 text-orange-400 border border-orange-500/30'
+                        : algorithm === 'lru'
+                        ? 'bg-blue-500/15 text-blue-400 border border-blue-500/30'
+                        : 'bg-violet-500/15 text-violet-400 border border-violet-500/30'
+                    }`}>
                       {algorithm.toUpperCase()} • {frames} frame{frames !== 1 ? 's' : ''}
                     </span>
                   </div>
@@ -361,22 +374,33 @@ export default function Simulator() {
               {activeTab === 'compare' && (
                 <div>
                   <div className="flex items-center justify-between mb-4">
-                    <h2 className="font-bold text-slate-200 text-base">LRU vs Optimal — Performance Comparison</h2>
+                    <h2 className="font-bold text-slate-200 text-base">FIFO vs LRU vs Optimal — Performance Comparison</h2>
                     <span className="text-xs text-slate-400 italic">Optimal is theoretically the best possible result</span>
                   </div>
-                  <ComparisonChart lruResult={lruResult} optimalResult={optimalResult} />
-                  <div className="grid grid-cols-2 gap-4 mt-6">
+                  <ComparisonChart
+                    fifoResult={fifoResult}
+                    lruResult={lruResult}
+                    optimalResult={optimalResult}
+                  />
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-6">
                     {[
-                      { label: 'LRU', res: lruResult, color: 'blue' },
+                      { label: 'FIFO',    res: fifoResult,    color: 'orange' },
+                      { label: 'LRU',     res: lruResult,     color: 'blue'   },
                       { label: 'Optimal', res: optimalResult, color: 'violet' },
                     ].map(({ label, res, color }) => (
                       <div key={label}
                         className={`p-4 rounded-xl border ${
-                          color === 'blue'
+                          color === 'orange'
+                            ? 'bg-orange-500/5 border-orange-500/20'
+                            : color === 'blue'
                             ? 'bg-blue-500/5 border-blue-500/20'
                             : 'bg-violet-500/5 border-violet-500/20'
                         }`}>
-                        <div className={`text-sm font-bold mb-2 ${color === 'blue' ? 'text-blue-400' : 'text-violet-400'}`}>
+                        <div className={`text-sm font-bold mb-2 ${
+                          color === 'orange' ? 'text-orange-400'
+                          : color === 'blue' ? 'text-blue-400'
+                          : 'text-violet-400'
+                        }`}>
                           {label}
                         </div>
                         <div className="grid grid-cols-3 gap-2 text-center">
@@ -396,13 +420,22 @@ export default function Simulator() {
                       </div>
                     ))}
                   </div>
-                  {lruResult && optimalResult && (
+                  {fifoResult && lruResult && optimalResult && (
                     <div className="mt-4 p-4 rounded-xl bg-slate-800/40 border border-slate-700/40">
                       <p className="text-sm text-slate-300">
                         <span className="text-amber-400 font-semibold">💡 Insight: </span>
-                        {lruResult.totalFaults === optimalResult.totalFaults
-                          ? 'LRU achieved the same performance as Optimal on this reference string — impressive!'
-                          : `Optimal produced ${lruResult.totalFaults - optimalResult.totalFaults} fewer page fault(s) than LRU. The gap shows the overhead of LRU's lack of future knowledge.`}
+                        {(() => {
+                          const minFaults = Math.min(fifoResult.totalFaults, lruResult.totalFaults, optimalResult.totalFaults);
+                          const best = fifoResult.totalFaults === minFaults && lruResult.totalFaults === minFaults
+                            ? 'FIFO and LRU both tied with Optimal'
+                            : fifoResult.totalFaults === minFaults
+                            ? 'FIFO tied with Optimal'
+                            : lruResult.totalFaults === minFaults
+                            ? 'LRU tied with Optimal'
+                            : null;
+                          if (best) return `${best} on this reference string — great result!`;
+                          return `Optimal achieved the fewest faults (${optimalResult.totalFaults}). LRU had ${lruResult.totalFaults - optimalResult.totalFaults} more, FIFO had ${fifoResult.totalFaults - optimalResult.totalFaults} more. FIFO's simplicity costs it future-use awareness.`;
+                        })()}
                       </p>
                     </div>
                   )}
