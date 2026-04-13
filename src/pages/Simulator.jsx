@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import InputForm from '../components/InputForm';
 import MemoryGrid from '../components/MemoryGrid';
 import Controls from '../components/Controls';
@@ -9,12 +9,6 @@ import { runOptimal } from '../algorithms/optimal';
 
 /**
  * Simulator — the main simulation page
- *
- * Manages all state for the virtual memory simulation:
- *  - User inputs (frames, page string, algorithm)
- *  - Simulation result (steps, stats)
- *  - Step-by-step playback (currentStep)
- *  - Comparison between LRU and Optimal
  */
 export default function Simulator() {
   // ── Inputs ────────────────────────────────────────────────────────────
@@ -23,14 +17,23 @@ export default function Simulator() {
   const [algorithm, setAlgorithm] = useState('lru');
 
   // ── Simulation state ──────────────────────────────────────────────────
-  const [result, setResult] = useState(null);          // current algo result
-  const [lruResult, setLruResult] = useState(null);    // for comparison
+  const [result, setResult] = useState(null);
+  const [lruResult, setLruResult] = useState(null);
   const [optimalResult, setOptimalResult] = useState(null);
-  const [currentStep, setCurrentStep] = useState(0);   // steps shown so far
+  const [currentStep, setCurrentStep] = useState(0);
   const [error, setError] = useState('');
-  const [activeTab, setActiveTab] = useState('grid');  // 'grid' | 'steps' | 'compare'
+  const [activeTab, setActiveTab] = useState('grid');
+  const [isAnimating, setIsAnimating] = useState(false);
 
-  // ── Parse and validate the page string ────────────────────────────────
+  // Interval ref so we can cancel at any time
+  const animIntervalRef = useRef(null);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => { if (animIntervalRef.current) clearInterval(animIntervalRef.current); };
+  }, []);
+
+  // ── Parse and validate the page string ───────────────────────────────
   const parsePages = useCallback((input) => {
     const parts = input.split(',').map((s) => s.trim()).filter(Boolean);
     if (parts.length === 0) return null;
@@ -39,7 +42,7 @@ export default function Simulator() {
     return nums;
   }, []);
 
-  // ── Start simulation ──────────────────────────────────────────────────
+  // ── Start simulation — animates each step one by one ─────────────────
   const handleStart = useCallback(() => {
     setError('');
     const pages = parsePages(pageInput);
@@ -53,35 +56,66 @@ export default function Simulator() {
       return;
     }
 
-    // Run currently selected algorithm
+    // Cancel any running animation
+    if (animIntervalRef.current) clearInterval(animIntervalRef.current);
+
     const runFn = algorithm === 'lru' ? runLRU : runOptimal;
     const res = runFn(pages, frames);
-    setResult(res);
-    setCurrentStep(res.steps.length); // Show all steps by default
-
-    // Run both algorithms for comparison chart
     const lru = runLRU(pages, frames);
     const opt = runOptimal(pages, frames);
+
+    setResult(res);
     setLruResult(lru);
     setOptimalResult(opt);
+    setCurrentStep(0);    // Reset to 0 — animation fills it in
+    setIsAnimating(true);
+
+    // Adaptive speed: target ~4 s total, clamp 120–500 ms per step
+    const total = res.steps.length;
+    const delay = Math.max(120, Math.min(500, Math.floor(4000 / total)));
+
+    let step = 0;
+    animIntervalRef.current = setInterval(() => {
+      step += 1;
+      setCurrentStep(step);
+      if (step >= total) {
+        clearInterval(animIntervalRef.current);
+        animIntervalRef.current = null;
+        setIsAnimating(false);
+      }
+    }, delay);
   }, [pageInput, frames, algorithm, parsePages]);
 
-  // ── Step through ──────────────────────────────────────────────────────
+  // ── Skip — jump to last step immediately ─────────────────────────────
+  const handleSkip = useCallback(() => {
+    if (animIntervalRef.current) clearInterval(animIntervalRef.current);
+    animIntervalRef.current = null;
+    setIsAnimating(false);
+    setCurrentStep((prev) => {
+      // Use the result we already have
+      if (result) return result.steps.length;
+      return prev;
+    });
+  }, [result]);
+
+  // ── Manual step (stops auto-animation) ───────────────────────────────
   const handleStep = useCallback(() => {
     setError('');
     const pages = parsePages(pageInput);
     if (!pages) return;
 
+    // Stop auto-animation
+    if (animIntervalRef.current) clearInterval(animIntervalRef.current);
+    animIntervalRef.current = null;
+    setIsAnimating(false);
+
     if (!result) {
-      // First step → run simulation but show only step 1
       const runFn = algorithm === 'lru' ? runLRU : runOptimal;
       const res = runFn(pages, frames);
       setResult(res);
       setCurrentStep(1);
-      const lru = runLRU(pages, frames);
-      const opt = runOptimal(pages, frames);
-      setLruResult(lru);
-      setOptimalResult(opt);
+      setLruResult(runLRU(pages, frames));
+      setOptimalResult(runOptimal(pages, frames));
     } else {
       setCurrentStep((prev) => Math.min(prev + 1, result.steps.length));
     }
@@ -89,6 +123,9 @@ export default function Simulator() {
 
   // ── Reset ─────────────────────────────────────────────────────────────
   const handleReset = useCallback(() => {
+    if (animIntervalRef.current) clearInterval(animIntervalRef.current);
+    animIntervalRef.current = null;
+    setIsAnimating(false);
     setResult(null);
     setLruResult(null);
     setOptimalResult(null);
@@ -96,26 +133,21 @@ export default function Simulator() {
     setError('');
   }, []);
 
-  // ── Derived values ─────────────────────────────────────────────────────
+  // ── Derived values ────────────────────────────────────────────────────
   const isRunning = Boolean(result);
-  const canStep = isRunning
-    ? currentStep < result.steps.length
-    : true;
-
-  // Stats derived from currently visible steps
+  const canStep = isRunning ? currentStep < result.steps.length : true;
   const visibleSteps = result ? result.steps.slice(0, currentStep) : [];
   const visibleFaults = visibleSteps.filter((s) => !s.isHit).length;
-  const visibleHits = visibleSteps.filter((s) => s.isHit).length;
-  const visibleRatio =
-    visibleSteps.length > 0
-      ? ((visibleHits / visibleSteps.length) * 100).toFixed(1)
-      : '0.0';
+  const visibleHits   = visibleSteps.filter((s) =>  s.isHit).length;
+  const visibleRatio  = visibleSteps.length > 0
+    ? ((visibleHits / visibleSteps.length) * 100).toFixed(1)
+    : '0.0';
 
   return (
     <div className="min-h-screen bg-[#0d1117] text-slate-200 p-4 md:p-8">
       <div className="max-w-7xl mx-auto space-y-6">
 
-        {/* ── Header ──────────────────────────────────────────────── */}
+        {/* ── Header ── */}
         <header className="text-center space-y-3 py-6 animate-slide-up">
           <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full
                           bg-blue-500/10 border border-blue-500/20 text-blue-400 text-xs font-semibold
@@ -134,12 +166,13 @@ export default function Simulator() {
           </p>
         </header>
 
-        {/* ── Configuration Card ──────────────────────────────────── */}
+        {/* ── Configuration Card ── */}
         <div className="glass-card rounded-2xl p-6 space-y-5 animate-slide-up" style={{ animationDelay: '0.05s' }}>
           <div className="flex items-center gap-3 mb-1">
             <div className="w-8 h-8 rounded-lg bg-blue-500/20 flex items-center justify-center">
               <svg className="w-4 h-4 text-blue-400" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
+                <path strokeLinecap="round" strokeLinejoin="round"
+                  d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
               </svg>
             </div>
             <h2 className="text-lg font-bold text-slate-100">Configuration</h2>
@@ -154,11 +187,12 @@ export default function Simulator() {
             onAlgorithm={setAlgorithm}
           />
 
-          {/* Error */}
           {error && (
             <div className="flex items-center gap-2 px-4 py-3 rounded-xl bg-red-500/10 border border-red-500/30 text-red-400 text-sm">
               <svg className="w-4 h-4 shrink-0" fill="currentColor" viewBox="0 0 20 20">
-                <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                <path fillRule="evenodd"
+                  d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z"
+                  clipRule="evenodd" />
               </svg>
               {error}
             </div>
@@ -168,14 +202,37 @@ export default function Simulator() {
             onStart={handleStart}
             onReset={handleReset}
             onStep={handleStep}
+            onSkip={handleSkip}
             isRunning={isRunning}
-            canStep={canStep}
+            isAnimating={isAnimating}
+            canStep={canStep && !isAnimating}
             currentStep={isRunning ? currentStep : 0}
             totalSteps={result ? result.steps.length : 0}
           />
+
+          {/* ── Progress bar (visible during animation) ── */}
+          {isAnimating && result && (
+            <div className="space-y-1.5 pt-1">
+              <div className="flex justify-between text-xs text-slate-500">
+                <span className="flex items-center gap-1.5">
+                  <span className="inline-block w-1.5 h-1.5 rounded-full bg-blue-400 animate-ping" />
+                  Simulating step by step…
+                </span>
+                <span className="font-mono text-blue-400">
+                  {currentStep}&nbsp;/&nbsp;{result.steps.length}
+                </span>
+              </div>
+              <div className="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-gradient-to-r from-blue-600 to-violet-500 rounded-full transition-all duration-150 ease-out"
+                  style={{ width: `${(currentStep / result.steps.length) * 100}%` }}
+                />
+              </div>
+            </div>
+          )}
         </div>
 
-        {/* ── Stats Panel ─────────────────────────────────────────── */}
+        {/* ── Stats Panel ── */}
         {isRunning && (
           <div className="animate-slide-up" style={{ animationDelay: '0.1s' }}>
             <StatsPanel
@@ -188,15 +245,14 @@ export default function Simulator() {
           </div>
         )}
 
-        {/* ── Visualization Tabs ───────────────────────────────────── */}
+        {/* ── Visualization Tabs ── */}
         {isRunning && (
           <div className="glass-card rounded-2xl overflow-hidden animate-slide-up" style={{ animationDelay: '0.15s' }}>
-            {/* Tab bar */}
             <div className="flex border-b border-slate-700/60">
               {[
                 { id: 'grid',    label: 'Memory Grid',    icon: '▦' },
                 { id: 'steps',   label: 'Step-by-Step',   icon: '≡' },
-                { id: 'compare', label: 'LRU vs Optimal', icon: '⟁' },
+                { id: 'compare', label: 'LRU vs Optimal', icon: '\u27C1' },
               ].map((tab) => (
                 <button
                   key={tab.id}
@@ -214,113 +270,101 @@ export default function Simulator() {
               ))}
             </div>
 
-            {/* Tab content */}
             <div className="p-6">
-              {/* ── Grid ─────────────────────────────────── */}
+              {/* Grid tab */}
               {activeTab === 'grid' && (
                 <div>
                   <div className="flex items-center justify-between mb-4">
-                    <h2 className="font-bold text-slate-200 text-base">
-                      Memory Frame Visualization
-                    </h2>
+                    <h2 className="font-bold text-slate-200 text-base">Memory Frame Visualization</h2>
                     <span className="text-xs px-2.5 py-1 rounded-full bg-slate-700/60 text-slate-400">
                       {algorithm.toUpperCase()} • {frames} frame{frames !== 1 ? 's' : ''}
                     </span>
                   </div>
                   <div className="overflow-x-auto">
-                    <MemoryGrid
-                      steps={result.steps}
-                      currentStep={currentStep}
-                      frames={frames}
-                    />
+                    <MemoryGrid steps={result.steps} currentStep={currentStep} frames={frames} />
                   </div>
                 </div>
               )}
 
-              {/* ── Step-by-Step ──────────────────────────── */}
+              {/* Steps tab */}
               {activeTab === 'steps' && (
                 <div>
-                  <h2 className="font-bold text-slate-200 text-base mb-4">
-                    Step-by-Step Execution Log
-                  </h2>
+                  <h2 className="font-bold text-slate-200 text-base mb-4">Step-by-Step Execution Log</h2>
                   <div className="overflow-x-auto rounded-xl border border-slate-700/50">
                     <table className="w-full text-sm">
                       <thead>
                         <tr className="border-b border-slate-700/60 bg-slate-800/40">
-                          <th className="text-left px-4 py-3 text-slate-400 font-semibold w-12">#</th>
+                          <th className="text-left   px-4 py-3 text-slate-400 font-semibold w-12">#</th>
                           <th className="text-center px-4 py-3 text-slate-400 font-semibold">Page</th>
                           <th className="text-center px-4 py-3 text-slate-400 font-semibold">Status</th>
                           <th className="text-center px-4 py-3 text-slate-400 font-semibold">Evicted</th>
-                          <th className="text-left px-4 py-3 text-slate-400 font-semibold">Frames After</th>
+                          <th className="text-left   px-4 py-3 text-slate-400 font-semibold">Frames After</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {result.steps.slice(0, currentStep).map((s, i) => (
-                          <tr
-                            key={i}
-                            className={`step-row border-b border-slate-700/30 transition-all duration-200
-                              ${i === currentStep - 1 ? 'bg-blue-500/5 ring-1 ring-inset ring-blue-500/20' : ''}`}
-                          >
-                            <td className="px-4 py-3 text-slate-500 font-mono text-xs">{s.step}</td>
-                            <td className="px-4 py-3 text-center">
-                              <span className="inline-flex items-center justify-center w-8 h-8 rounded-lg
-                                             bg-slate-700/60 font-mono font-bold text-slate-200">
-                                {s.page}
-                              </span>
-                            </td>
-                            <td className="px-4 py-3 text-center">
-                              <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold
-                                ${s.isHit
-                                  ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
-                                  : 'bg-red-500/15 text-red-400 border border-red-500/30'
-                                }`}>
-                                <span className={`w-1.5 h-1.5 rounded-full ${s.isHit ? 'bg-emerald-400' : 'bg-red-400'}`} />
-                                {s.isHit ? 'HIT' : 'FAULT'}
-                              </span>
-                            </td>
-                            <td className="px-4 py-3 text-center font-mono text-sm">
-                              {s.evicted !== null ? (
-                                <span className="text-amber-400">{s.evicted}</span>
-                              ) : (
-                                <span className="text-slate-600">—</span>
-                              )}
-                            </td>
-                            <td className="px-4 py-3">
-                              <div className="flex gap-1.5">
-                                {s.frames.map((p, fi) => (
-                                  <span
-                                    key={fi}
-                                    className="inline-flex items-center justify-center w-8 h-7
-                                               rounded-md bg-slate-700/60 font-mono text-xs text-slate-300 font-bold"
-                                  >
-                                    {p ?? '—'}
-                                  </span>
-                                ))}
-                              </div>
-                            </td>
-                          </tr>
-                        ))}
+                        {result.steps.slice(0, currentStep).map((s, i) => {
+                          const isNewest = i === currentStep - 1;
+                          return (
+                            <tr
+                              key={i}
+                              className={`step-row border-b border-slate-700/30
+                                ${isNewest ? 'step-row-enter bg-blue-500/5 ring-1 ring-inset ring-blue-500/20' : ''}`}
+                            >
+                              <td className="px-4 py-3 text-slate-500 font-mono text-xs">{s.step}</td>
+                              <td className="px-4 py-3 text-center">
+                                <span className={`inline-flex items-center justify-center w-8 h-8 rounded-lg font-mono font-bold
+                                  ${isNewest
+                                    ? 'bg-blue-500/25 text-blue-200 ring-1 ring-blue-400/60'
+                                    : 'bg-slate-700/60 text-slate-200'}`}>
+                                  {s.page}
+                                </span>
+                              </td>
+                              <td className="px-4 py-3 text-center">
+                                <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold
+                                  ${s.isHit
+                                    ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
+                                    : 'bg-red-500/15 text-red-400 border border-red-500/30'}`}>
+                                  <span className={`w-1.5 h-1.5 rounded-full ${s.isHit ? 'bg-emerald-400' : 'bg-red-400'}`} />
+                                  {s.isHit ? 'HIT' : 'FAULT'}
+                                </span>
+                              </td>
+                              <td className="px-4 py-3 text-center font-mono text-sm">
+                                {s.evicted !== null
+                                  ? <span className="text-amber-400">{s.evicted}</span>
+                                  : <span className="text-slate-600">—</span>}
+                              </td>
+                              <td className="px-4 py-3">
+                                <div className="flex gap-1.5">
+                                  {s.frames.map((p, fi) => (
+                                    <span
+                                      key={fi}
+                                      className={`inline-flex items-center justify-center w-8 h-7 rounded-md font-mono text-xs font-bold
+                                        ${isNewest && p !== null
+                                          ? 'bg-blue-500/20 text-blue-200 ring-1 ring-blue-400/40'
+                                          : 'bg-slate-700/60 text-slate-300'}`}
+                                    >
+                                      {p ?? '—'}
+                                    </span>
+                                  ))}
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
                       </tbody>
                     </table>
                   </div>
                 </div>
               )}
 
-              {/* ── Comparison Chart ──────────────────────── */}
+              {/* Compare tab */}
               {activeTab === 'compare' && (
                 <div>
                   <div className="flex items-center justify-between mb-4">
-                    <h2 className="font-bold text-slate-200 text-base">
-                      LRU vs Optimal — Performance Comparison
-                    </h2>
-                    <span className="text-xs text-slate-400 italic">
-                      Optimal is theoretically the best possible result
-                    </span>
+                    <h2 className="font-bold text-slate-200 text-base">LRU vs Optimal — Performance Comparison</h2>
+                    <span className="text-xs text-slate-400 italic">Optimal is theoretically the best possible result</span>
                   </div>
-
                   <ComparisonChart lruResult={lruResult} optimalResult={optimalResult} />
-
-                  {/* Side-by-side summary */}
                   <div className="grid grid-cols-2 gap-4 mt-6">
                     {[
                       { label: 'LRU', res: lruResult, color: 'blue' },
@@ -352,16 +396,13 @@ export default function Simulator() {
                       </div>
                     ))}
                   </div>
-
-                  {/* Insight */}
                   {lruResult && optimalResult && (
                     <div className="mt-4 p-4 rounded-xl bg-slate-800/40 border border-slate-700/40">
                       <p className="text-sm text-slate-300">
                         <span className="text-amber-400 font-semibold">💡 Insight: </span>
                         {lruResult.totalFaults === optimalResult.totalFaults
                           ? 'LRU achieved the same performance as Optimal on this reference string — impressive!'
-                          : `Optimal produced ${lruResult.totalFaults - optimalResult.totalFaults} fewer page fault(s) than LRU.
-                             The gap shows the overhead of LRU's lack of future knowledge.`}
+                          : `Optimal produced ${lruResult.totalFaults - optimalResult.totalFaults} fewer page fault(s) than LRU. The gap shows the overhead of LRU's lack of future knowledge.`}
                       </p>
                     </div>
                   )}
@@ -371,7 +412,6 @@ export default function Simulator() {
           </div>
         )}
 
-        {/* ── Footer ──────────────────────────────────────────────── */}
         <footer className="text-center text-xs text-slate-600 py-6 border-t border-slate-800/60">
           Virtual Memory Optimization Simulator • Built with React + Vite + Tailwind CSS + Chart.js
         </footer>
